@@ -1,124 +1,139 @@
-using Exiled.API.Features;
-using Exiled.API.Features.Attributes;
-using Exiled.API.Features.Spawn;
-using Exiled.CustomItems.API.Features;
-using Exiled.Events.EventArgs.Player;
-using Exiled.API.Features.Items;
 using MEC;
-using PlayerRoles;
 using System.Collections.Generic;
-using System.ComponentModel;
+using System.Linq;
 using System.Text;
+using FrikanUtils.CustomItems;
+using FrikanUtils.Spawnpoints;
+using FrikanUtils.Spawnpoints.LootSpawn;
+using LabApi.Events.Arguments.PlayerEvents;
+using LabApi.Events.Handlers;
+using LabApi.Features.Wrappers;
+using MetalDetectorW;
 using UnityEngine;
+using Logger = LabApi.Features.Console.Logger;
 
 namespace MetalDetector
 {
-    [CustomItem(ItemType.GunCOM15)]
-    public class MetalDetectorItem : CustomWeapon
+    public class MetalDetectorItem : CustomWeaponItem
     {
-        public override uint Id { get; set; } = 60;
-        public override string Name { get; set; } = "Metal Detector";
-        public override string Description { get; set; } = "Scans players for items.";
-        public override float Weight { get; set; } = 1f;
+        public override string Id => "gamendegamer.metal_detector";
+        public override string Name => "Inventory Scanner";
+        public override string Description => "Scans players for items.";
+        public override ItemType VisualType => ItemType.GunCOM15;
 
-        public override SpawnProperties SpawnProperties { get; set; } = new SpawnProperties
+        public override SpawnLocation SpawnLocation => new SpawnLocation
         {
-            Limit = 1,
-            DynamicSpawnPoints = new List<DynamicSpawnPoint>
+            Points = new ISpawnPoint[]
             {
-                new DynamicSpawnPoint
+                new LootSpawnPoint
                 {
-                    Chance = 100,
-                    Location = Exiled.API.Enums.SpawnLocationType.InsideLczArmory,
+                    Point = LootPoint.HczCheckpointDesk,
+                    Chance = 1
                 }
             }
         };
 
-        public override float Damage { get; set; } = 0;
-        public override byte ClipSize { get; set; } = 12;
+        public override int? Weight => 1;
 
         private Dictionary<int, float> _cooldowns = new Dictionary<int, float>();
         private readonly int _mask = LayerMask.GetMask("Default", "Player", "Hitbox");
 
         protected override void SubscribeEvents()
         {
-            Exiled.Events.Handlers.Player.Left += OnLeft;
+            PlayerEvents.Left += OnLeft;
             base.SubscribeEvents();
         }
 
         protected override void UnsubscribeEvents()
         {
-            Exiled.Events.Handlers.Player.Left -= OnLeft;
+            PlayerEvents.Left -= OnLeft;
             base.UnsubscribeEvents();
         }
 
-        protected override void OnShooting(ShootingEventArgs ev)
+        protected override void OnShootingWeapon(PlayerShootingWeaponEventArgs ev)
         {
-            ev.IsAllowed = false;
-
-            if (_cooldowns.TryGetValue(ev.Player.Id, out float nextUseTime) && Time.time < nextUseTime)
+            if (!Check(ev.FirearmItem.Serial))
             {
-                ev.Player.ShowHint(Plugin.Instance.Translation.CooldownMessage, 2f);
                 return;
             }
 
-            Vector3 startPos = ev.Player.CameraTransform.position + (ev.Player.CameraTransform.forward * 0.1f);
+            ev.IsAllowed = false;
+
+            if (_cooldowns.TryGetValue(ev.Player.PlayerId, out var nextUseTime) && Time.time < nextUseTime)
+            {
+                ev.Player.SendHint(Plugin.Instance.Config.CooldownMessage, 2f);
+                return;
+            }
+
+            var startPos = ev.Player.Camera.position + ev.Player.Camera.forward * 0.1f;
 
             // Use Config.MaxDistance
-            if (Physics.Raycast(startPos, ev.Player.CameraTransform.forward, out RaycastHit hit, Plugin.Instance.Config.MaxDistance, _mask))
+            if (Physics.Raycast(startPos, ev.Player.Camera.forward, out RaycastHit hit,
+                    Plugin.Instance.Config.MaxDistance, _mask))
             {
-                Player target = Player.Get(hit.collider);
+                var target = Player.Get(hit.collider.GetComponentInParent<ReferenceHub>());
 
-                if (target != null && target != ev.Player && !target.IsScp)
+                if (target != null && target != ev.Player && !target.IsSCP)
                 {
                     // Use Config.Cooldown
-                    _cooldowns[ev.Player.Id] = Time.time + Plugin.Instance.Config.Cooldown;
+                    _cooldowns[ev.Player.PlayerId] = Time.time + Plugin.Instance.Config.Cooldown;
                     Timing.RunCoroutine(ScanRoutine(ev.Player, target));
                 }
                 else
                 {
-                    ev.Player.ShowHint(Plugin.Instance.Translation.NoPlayerFound, 2f);
+                    ev.Player.SendHint(Plugin.Instance.Config.NoPlayerFound, 2f);
                 }
             }
             else
             {
-                ev.Player.ShowHint(Plugin.Instance.Translation.NoPlayerFound, 2f);
+                ev.Player.SendHint(Plugin.Instance.Config.NoPlayerFound, 2f);
             }
         }
 
         private IEnumerator<float> ScanRoutine(Player scanner, Player target)
         {
-            scanner.ShowHint(Plugin.Instance.Translation.ScanStarted.Replace("%player%", target.Nickname), 2f);
-            target.Broadcast(3, Plugin.Instance.Translation.TargetScanned);
+            scanner.SendHint(Plugin.Instance.Config.ScanStarted.Replace("%player%", target.Nickname), 2f);
+            target.SendBroadcast(Plugin.Instance.Config.TargetScanned, 3);
 
             // Use Config.ScanDuration
             yield return Timing.WaitForSeconds(Plugin.Instance.Config.ScanDuration);
 
-            if (scanner == null || target == null || !scanner.IsConnected || !target.IsConnected)
+            if (scanner == null || target == null || scanner.IsDestroyed || target.IsDestroyed)
                 yield break;
 
-            if (target.Items.Count == 0)
+            if (!target.Items.Any())
             {
-                scanner.ShowHint(Plugin.Instance.Translation.NoItems.Replace("%player%", target.Nickname), 4f);
+                scanner.SendHint(Plugin.Instance.Config.NoItems.Replace("%player%", target.Nickname), 4f);
             }
             else
             {
                 StringBuilder sb = new StringBuilder();
-                sb.AppendLine(Plugin.Instance.Translation.ScanResult.Replace("%player%", target.Nickname));
-                
+                sb.AppendLine(Plugin.Instance.Config.ScanResult.Replace("%player%", target.Nickname));
+
                 foreach (Item item in target.Items)
                 {
                     sb.AppendLine($"- {item.Type}");
                 }
 
-                scanner.ShowHint(sb.ToString(), 6f);
+                scanner.SendHint(sb.ToString(), 6f);
             }
         }
 
-        private void OnLeft(LeftEventArgs ev)
+        protected override void Setup(Item item)
         {
-            if (_cooldowns.ContainsKey(ev.Player.Id))
-                _cooldowns.Remove(ev.Player.Id);
+            base.Setup(item);
+
+            if (item is FirearmItem firearm)
+            {
+                firearm.StoredAmmo = 2;
+                firearm.ChamberedAmmo = 1;
+                firearm.Cocked = true;
+            }
+        }
+
+        private void OnLeft(PlayerLeftEventArgs ev)
+        {
+            _cooldowns.Remove(ev.Player.PlayerId);
         }
     }
 }

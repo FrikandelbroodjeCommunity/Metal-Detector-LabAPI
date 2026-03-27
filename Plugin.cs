@@ -1,29 +1,32 @@
-using Exiled.API.Features;
 using System;
+using FrikanUtils.CustomItems;
+using LabApi.Features;
+using LabApi.Loader.Features.Plugins;
+using MetalDetector;
 
-namespace MetalDetector
+namespace MetalDetectorW
 {
-    public class Plugin : Plugin<Config, Translations>
+    public class Plugin : Plugin<Config>
     {
         public override string Author => "ByLeTalha";
         public override string Name => "MetalDetector";
-        public override string Prefix => "MetalDect";
+        public override string Description => "Allows the scanning of a players inventory";
         public override Version Version => new Version(2, 0, 0);
+        public override Version RequiredApiVersion => new Version(LabApiProperties.CompiledVersion);
 
         public static Plugin Instance;
 
-        public override void OnEnabled()
+        private static readonly MetalDetectorItem Item = new MetalDetectorItem();
+
+        public override void Enable()
         {
             Instance = this;
-            Exiled.CustomItems.API.Features.CustomItem.RegisterItems(overrideClass: Config);
-            base.OnEnabled();
+            CustomItemHandler.RegisterCustomItem(Item);
         }
 
-        public override void OnDisabled()
+        public override void Disable()
         {
-            Exiled.CustomItems.API.Features.CustomItem.UnregisterItems();
-            Instance = null;
-            base.OnDisabled();
+            CustomItemHandler.UnregisterCustomItem(Item);
         }
     }
 }
